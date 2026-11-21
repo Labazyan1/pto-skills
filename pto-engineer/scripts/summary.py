@@ -155,40 +155,26 @@ def board_data(team: Path, data: dict) -> dict:
 
 
 def text_summary(data: dict, days: int, expected: list[str] | None = None) -> str:
-    since = (dt.datetime.now().astimezone() - dt.timedelta(days=days)).isoformat()
     acts = [a for v in data.values() for a in v["acts"]]
     rem = open_remarks(data)
-    lines = [f"Сводка за {days} дн. Инженеров: {len(data)}, актов: {len(acts)}, открытых замечаний технадзора/заказчика: {len(rem)}."]
+    lines = [f"Сводка. Инженеров: {len(data)}, актов: {len(acts)}, открытых замечаний технадзора/заказчика: {len(rem)}."]
     silent = [m for m in (expected or []) if safe_name(m) not in data]
     if silent:
         lines.append("Нет данных от инженеров (папка пуста или Диск не синхронизирован): " + ", ".join(silent))
     for name, v in data.items():
-        recent = [e for e in v["journal"] if str(e.get("время", "")) >= since]
-        made = sum(e.get("действие") == "создан" for e in recent)
-        fixed = sum(e.get("действие") == "исправлен" for e in recent)
+        # только готовность и замечания: журнал запросов и список файлов инженера в сводку не идут (решение 21.11)
         st = defaultdict(int)
         for a in v["acts"]:
             st[a.get("статус") or "черновик"] += 1
         mine = [r for r in rem if r.get("_инженер") == name]
-        last = max((str(e.get("время", "")) for e in v["journal"]), default="—")[:16].replace("T", " ")
         snap = v.get("snap") or {}
-        if snap:
-            s, ch = snap.get("итоги", {}), snap.get("изменения", {})
-            lines.append(f"- {name}: в рабочих папках {s.get('файлов', 0)} файлов, актов {s.get('актов', 0)} {s.get('по_статусам', {})}; "
-                         f"системы {', '.join(s.get('системы', [])) or '—'}; с прошлого скана новых {len(ch.get('новые', []))}, "
-                         f"изменённых {len(ch.get('изменённые', []))}; скан {str(snap.get('обновлено', ''))[:16].replace('T', ' ')}"
-                         + (f" — ДАННЫЕ СТАРШЕ {STALE_DAYS} ДН., попросите инженера запустить скан" if stale(snap) else ""))
-        asked = [e for e in recent if e.get("действие") == "запрос"]
-        if asked:
-            lines.append(f"  запросов к скиллу: {len(asked)}, последний: {str(asked[-1].get('текст', ''))[:100]}")
-        lines.append(f"  {name}: новых {made}, правок {fixed}; черновиков {st['черновик']}, на подписи {st['на_подписи']}, "
-                     f"подписано {st['подписан']}; открытых замечаний {len(mine)}; последняя активность {last}")
+        when = str(snap.get("обновлено", ""))[:16].replace("T", " ") or "—"
+        lines.append(f"- {name}: подписано {st['подписан']}, на подписи {st['на_подписи']}, в работе {st['черновик']}; "
+                     f"открытых замечаний {len(mine)}; данные обновлены {when}"
+                     + (f" — СТАРШЕ {STALE_DAYS} ДН., попросите инженера запустить скан" if stale(snap) else ""))
         for r in mine[:5]:
             lines.append(f"    замечание {r.get('от')}{' к ' + r['акт'] if r.get('акт') else ''}: {str(r.get('текст', ''))[:100]}"
                          + (f" (ответ дан: {str(r.get('ответ'))[:60]})" if r.get("статус") == "ответ_дан" else ""))
-    missing = [e for v in data.values() for e in v["journal"] if e.get("действие") == "нет_формы" and str(e.get("время", "")) >= since]
-    if missing:
-        lines.append("Просили, а скилл не умеет: " + "; ".join(str(e.get("заметка", ""))[:80] for e in missing))
     return "\n".join(lines)
 
 
