@@ -1,8 +1,12 @@
 """Установка и обновление скилла с GitHub (без git: архив репозитория по HTTPS).
 
 python update.py --check          — есть ли новая версия (раз в день, иначе молчит; --force — проверить сейчас)
-python update.py                  — обновить этот скилл до последней версии
-python update.py --install pto-head [--to ПАПКА]   — поставить скилл (по умолчанию в ~/.claude/skills)
+python update.py                  — показать, какие файлы изменит обновление (ничего не меняет)
+python update.py --yes            — применить обновление (после того как человек посмотрел список и сказал «да»)
+python update.py --off | --on     — выключить / включить проверку обновлений (скилл тогда не ходит в сеть сам)
+python update.py --install pto-head [--to ПАПКА] [--version 2026.11.21]   — поставить скилл (по умолчанию в ~/.claude/skills)
+Ставится выпуск по тегу v<версия> (не текущая ветка): то, что посмотрели, то и ставится. Сетевые обращения —
+только чтение с raw.githubusercontent.com и codeload.github.com; данные скилл никуда не отправляет.
 Источник — файл source.json рядом со SKILL.md ({"repo": "владелец/репозиторий", "branch": "main"}).
 Настройки и данные (~/.pto-skill, папка команды) обновление не трогает: меняется только папка скилла.
 """
@@ -49,9 +53,45 @@ def remote_version(src: dict) -> str:
     return _get(f"{base}/VERSION").decode("utf-8").strip()
 
 
-def archive(src: dict) -> bytes:
-    url = os.environ.get("PTO_SKILL_ZIP") or f"https://codeload.github.com/{src['repo']}/zip/refs/heads/{src['branch']}"
+def archive(src: dict, version: str) -> bytes:
+    """Архив выпуска по тегу v<версия>: код выпуска не меняется вслед за веткой."""
+    url = os.environ.get("PTO_SKILL_ZIP") or f"https://codeload.github.com/{src['repo']}/zip/refs/tags/v{version}"
     return _get(url)
+
+
+def _state_path() -> Path:
+    from common import home
+    return home() / "update_check.json"
+
+
+def _state() -> dict:
+    try:
+        p = _state_path()
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return {}
+
+
+def _save_state(st: dict) -> None:
+    p = _state_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+
+
+def _files(root: Path) -> dict:
+    import hashlib
+    return {f.relative_to(root).as_posix(): hashlib.sha256(f.read_bytes()).hexdigest()
+            for f in root.rglob("*") if f.is_file() and "__pycache__" not in f.parts}
+
+
+def plan(data: bytes, name: str, target: Path) -> dict:
+    """Что изменит обновление: новые, изменённые, удалённые файлы (в target ничего не пишется)."""
+    with tempfile.TemporaryDirectory(prefix="pto-skill-diff-") as tmp:
+        stage = Path(tmp) / name
+        version = extract_skill(data, name, stage)
+        new, old = _files(stage), _files(target) if target.exists() else {}
+        return {"версия": version, "новые": sorted(set(new) - set(old)), "удалённые": sorted(set(old) - set(new)),
+                "изменённые": sorted(k for k in new if k in old and new[k] != old[k])}
 
 
 def newer(a: str, b: str) -> bool:
@@ -100,13 +140,10 @@ def extract_skill(data: bytes, name: str, target: Path) -> str:
 
 
 def check(force: bool) -> int:
-    from common import home
-    mark = home() / "update_check.json"
+    last = _state()
     today = dt.date.today().isoformat()
-    try:
-        last = json.loads(mark.read_text(encoding="utf-8")) if mark.exists() else {}
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        last = {}
+    if last.get("выключено") and not force:
+        return 0                                   # человек выключил проверку: в сеть не ходим
     if not force and last.get("день") == today:
         return 0
     try:
@@ -114,14 +151,10 @@ def check(force: bool) -> int:
     except OSError as exc:
         print(f"Проверить обновление не удалось (нет сети?): {type(exc).__name__}")
         return 0
-    mark.parent.mkdir(parents=True, exist_ok=True)
-    mark.write_text(json.dumps({"день": today, "версия": remote}), encoding="utf-8")
+    _save_state({**last, "день": today, "версия": remote})
     mine = local_version()
     if newer(remote, mine):
-        print(f"Есть новая версия скилла: {remote} (у вас {mine}). Обновить: python scripts/update.py")
-        news = SKILL_DIR / "CHANGELOG.md"
-        if news.exists():
-            print("Что нового — CHANGELOG.md после обновления.")
+        print(f"Есть новая версия скилла: {remote} (у вас {mine}). Посмотреть, что изменится: python scripts/update.py")
     else:
         print(f"Скилл актуален: {mine}")
     return 0
@@ -133,19 +166,41 @@ def main(argv=None) -> int:
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--install")
     ap.add_argument("--to")
+    ap.add_argument("--version")
+    ap.add_argument("--yes", action="store_true")
+    ap.add_argument("--off", action="store_true")
+    ap.add_argument("--on", action="store_true")
     a = ap.parse_args(argv)
+    if a.off or a.on:
+        _save_state({**_state(), "выключено": bool(a.off)})
+        print("Проверка обновлений выключена: скилл сам в сеть не ходит. Включить: --on." if a.off
+              else "Проверка обновлений включена (раз в день).")
+        return 0
     if a.check:
         return check(a.force)
     src = source()
+    version = a.version or remote_version(src)
     if a.install:
         target = Path(a.to) if a.to else Path.home() / ".claude" / "skills" / a.install
-        version = extract_skill(archive(src), a.install, target)
-        print(f"Установлен {a.install} {version}: {target}. Откройте Claude и напишите, что нужно, например «покажи здание».")
+        got = extract_skill(archive(src, version), a.install, target)
+        print(f"Установлен {a.install} {got}: {target}. Откройте Claude и напишите, что нужно, например «покажи здание».")
         return 0
     mine = local_version()
-    data = archive(src)
-    version = extract_skill(data, SKILL_DIR.name, SKILL_DIR)
-    print(f"Обновлено: {mine} → {version}" if version != mine else f"Уже последняя версия: {version}")
+    if not a.version and not newer(version, mine):
+        print(f"Уже последняя версия: {mine}")
+        return 0
+    data = archive(src, version)
+    ch = plan(data, SKILL_DIR.name, SKILL_DIR)
+    if not a.yes:
+        print(f"Обновление {mine} → {ch['версия']} изменит файлы скилла (настройки и данные не трогает):")
+        for k, label in (("новые", "новые"), ("изменённые", "изменённые"), ("удалённые", "удалённые")):
+            if ch[k]:
+                print(f"  {label}: " + ", ".join(ch[k]))
+        print("Что нового — CHANGELOG.md в репозитории. Применить: python scripts/update.py --yes"
+              + (f" --version {a.version}" if a.version else ""))
+        return 3
+    got = extract_skill(data, SKILL_DIR.name, SKILL_DIR)
+    print(f"Обновлено: {mine} → {got}")
     return 0
 
 
