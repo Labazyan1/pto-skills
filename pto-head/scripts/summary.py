@@ -38,13 +38,20 @@ def collect(team: Path) -> dict:
                 snap = {}
         acts += scanned_acts(snap, {str(a.get("номер")) for a in acts})
         remarks = load_remarks(d)
-        if acts or snap or remarks or any(e.get("действие") != "сводка" for e in journal):   # папка начальника — только сводки
+        if acts or snap or remarks or any(e.get("действие") != "сводка" for e in journal):   # пустая папка (только настройка) не в счёт
             for a in acts:
                 a["_инженер"] = d.name
             for r in remarks:
                 r["_инженер"] = d.name
-            out[d.name] = {"acts": acts, "journal": journal, "snap": snap, "remarks": remarks}
+            out[d.name] = {"acts": acts, "journal": journal, "snap": snap, "remarks": remarks, "роль": _role(d)}
     return out
+
+
+def _role(d: Path) -> str:
+    try:
+        return json.loads((d / "владелец.json").read_text(encoding="utf-8")).get("роль") or "инженер"
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+        return "инженер"
 
 
 def open_remarks(data: dict) -> list[dict]:
@@ -169,7 +176,8 @@ def text_summary(data: dict, days: int, expected: list[str] | None = None) -> st
         mine = [r for r in rem if r.get("_инженер") == name]
         snap = v.get("snap") or {}
         when = str(snap.get("обновлено", ""))[:16].replace("T", " ") or "—"
-        lines.append(f"- {name}: подписано {st['подписан']}, на подписи {st['на_подписи']}, в работе {st['черновик']}; "
+        who = f"{name} (начальник, свои системы)" if v.get("роль") == "начальник" else name
+        lines.append(f"- {who}: подписано {st['подписан']}, на подписи {st['на_подписи']}, в работе {st['черновик']}; "
                      f"открытых замечаний {len(mine)}; данные обновлены {when}"
                      + (f" — СТАРШЕ {STALE_DAYS} ДН., попросите инженера запустить скан" if stale(snap) else ""))
         for r in mine[:5]:

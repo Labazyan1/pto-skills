@@ -86,7 +86,7 @@ def claim(cfg: dict) -> str | None:
     """Своя подпапка инженера: занята другим человеком с тем же именем — отказ."""
     d = engineer_dir(cfg)
     owner = d / "владелец.json"
-    me = {"имя": cfg["engineer"], "почта": cfg.get("email", "")}
+    me = {"имя": cfg["engineer"], "почта": cfg.get("email", ""), "роль": cfg.get("role") or "инженер"}
     if owner.exists():
         try:
             other = json.loads(owner.read_text(encoding="utf-8"))
@@ -182,14 +182,12 @@ def main(argv=None) -> int:
     for k in ("share", "share_name", "dev_folder", "consent_version", "consent_at", "consent_revoked"):
         cfg.pop(k, None)                      # старые настройки передачи разработчикам больше не используются
     remember_object(cfg, team)
-    if role == "инженер":
-        err = claim(cfg)
-        if err:
-            print(err)
-            return 3
+    err = claim(cfg)                          # своя подпапка — и у начальника: у него тоже свои системы и запросы
+    if err:
+        print(err)
+        return 3
     save_config(cfg)
-    if role == "инженер":
-        log_event(cfg, "сводка", заметка="скилл настроен")
+    log_event(cfg, "сводка", заметка="скилл настроен", роль=role)
     print(f"Готово: {engineer}, объект {team.name}, роль {role}.")
     return 0
 
