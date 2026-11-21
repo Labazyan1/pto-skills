@@ -5,8 +5,9 @@ python update.py                  — показать, какие файлы и
 python update.py --yes            — применить обновление (после того как человек посмотрел список и сказал «да»)
 python update.py --off | --on     — выключить / включить проверку обновлений (скилл тогда не ходит в сеть сам)
 python update.py --install pto-head [--to ПАПКА] [--version 2026.11.21]   — поставить скилл (по умолчанию в ~/.claude/skills)
-Ставится выпуск по тегу v<версия> (не текущая ветка): то, что посмотрели, то и ставится. Сетевые обращения —
-только чтение с raw.githubusercontent.com и codeload.github.com; данные скилл никуда не отправляет.
+Ставится архив из выпуска v<версия> на GitHub (не текущая ветка): то, что посмотрели, то и ставится. Сетевые
+обращения — только чтение с raw.githubusercontent.com (VERSION) и github.com (архив выпуска); GitHub считает число
+скачиваний архива, больше ничего: данные скилл никуда не отправляет.
 Источник — файл source.json рядом со SKILL.md ({"repo": "владелец/репозиторий", "branch": "main"}).
 Настройки и данные (~/.pto-skill, папка команды) обновление не трогает: меняется только папка скилла.
 """
@@ -53,10 +54,24 @@ def remote_version(src: dict) -> str:
     return _get(f"{base}/VERSION").decode("utf-8").strip()
 
 
-def archive(src: dict, version: str) -> bytes:
-    """Архив выпуска по тегу v<версия>: код выпуска не меняется вслед за веткой."""
-    url = os.environ.get("PTO_SKILL_ZIP") or f"https://codeload.github.com/{src['repo']}/zip/refs/tags/v{version}"
-    return _get(url)
+def archive(src: dict, version: str, name: str) -> bytes:
+    """Архив скилла из выпуска v<версия> на GitHub (код выпуска не меняется вслед за веткой). GitHub сам считает
+    скачивания файлов выпуска — так автор видит число установок и обновлений; скилл при этом ничего не отправляет.
+    Скачанный архив кладётся в ~/.pto-skill/загрузки/: показ изменений и применение — одно скачивание."""
+    home = Path(os.environ.get("PTO_SKILL_HOME") or Path.home() / ".pto-skill")   # без common: install.py живёт отдельно
+    cache = home / "загрузки" / f"{name}-{version}.zip"
+    if cache.exists() and not os.environ.get("PTO_SKILL_ZIP"):
+        return cache.read_bytes()
+    url = os.environ.get("PTO_SKILL_ZIP") or f"https://github.com/{src['repo']}/releases/download/v{version}/{name}.zip"
+    data = _get(url)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        for old in cache.parent.glob(f"{name}-*.zip"):
+            old.unlink(missing_ok=True)
+        cache.write_bytes(data)
+    except OSError:
+        pass
+    return data
 
 
 def _state_path() -> Path:
@@ -182,14 +197,14 @@ def main(argv=None) -> int:
     version = a.version or remote_version(src)
     if a.install:
         target = Path(a.to) if a.to else Path.home() / ".claude" / "skills" / a.install
-        got = extract_skill(archive(src, version), a.install, target)
+        got = extract_skill(archive(src, version, a.install), a.install, target)
         print(f"Установлен {a.install} {got}: {target}. Откройте Claude и напишите, что нужно, например «покажи здание».")
         return 0
     mine = local_version()
     if not a.version and not newer(version, mine):
         print(f"Уже последняя версия: {mine}")
         return 0
-    data = archive(src, version)
+    data = archive(src, version, SKILL_DIR.name)
     ch = plan(data, SKILL_DIR.name, SKILL_DIR)
     if not a.yes:
         print(f"Обновление {mine} → {ch['версия']} изменит файлы скилла (настройки и данные не трогает):")
