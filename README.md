@@ -15,6 +15,18 @@
 
 ## Установка
 
+### Если работаете в обычной вкладке «Чат» Claude Desktop
+
+1. Скачайте `pto-chat.mcpb` со страницы последнего выпуска: https://github.com/Labazyan1/pto-skills/releases/latest
+2. Дважды щёлкните файл. Claude Desktop откроет окно установки расширения.
+3. В окне укажите имя, роль (инженер или начальник), папку команды «ПТО — …» на Google Диске и свои рабочие папки.
+4. В обычном чате напишите «покажи здание».
+
+Нужен Python 3.9+. Обновление: скачать новый `pto-chat.mcpb` и поставить поверх.
+
+### Если работаете во вкладке Code (Claude Desktop или Claude Code)
+
+
 Напишите Claude: «установи скилл pto-head с github.com/Labazyan1/pto-skills» (инженеру — pto-engineer). Или сами в PowerShell:
 
 ```powershell
