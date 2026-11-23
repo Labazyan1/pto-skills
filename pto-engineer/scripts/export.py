@@ -14,7 +14,10 @@ python export.py --если-старше 7    — собрать, только �
 from __future__ import annotations
 
 import argparse
+import re
 import os
+import subprocess
+import tempfile
 import datetime as _dt
 import sys
 import zipfile
@@ -46,6 +49,29 @@ def out_dir(cfg: dict | None = None) -> Path:
     return home() / "выгрузка"
 
 
+def _readiness(cfg: dict) -> dict[str, bytes]:
+    """Готовность по системам: здание.html, доска.html и текст сводки — свежие, теми же скриптами, что у начальника."""
+    here = Path(__file__).resolve().parent
+    env = {**os.environ, "PTO_NO_OPEN": "1", "PYTHONIOENCODING": "utf-8"}
+    out: dict[str, bytes] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        b = Path(tmp) / "здание.html"
+        try:
+            subprocess.run([sys.executable, str(here / "building.py"), "--out", str(b), "--no-open"], cwd=here, env=env,
+                           capture_output=True, timeout=300)
+            if b.exists():
+                out["здание.html"] = b.read_bytes()
+            r = subprocess.run([sys.executable, str(here / "summary.py")], cwd=here, env=env, capture_output=True, timeout=300)
+            if r.returncode == 0 and r.stdout:
+                out["сводка.txt"] = r.stdout
+        except (OSError, subprocess.SubprocessError):
+            pass
+    board = Path(cfg.get("team_folder") or "") / "доска.html"
+    if cfg.get("team_folder") and board.exists():
+        out["доска.html"] = board.read_bytes()
+    return out
+
+
 def _members(cfg: dict, all_: bool) -> list[Path]:
     if not all_:
         return [engineer_dir(cfg)]
@@ -61,12 +87,14 @@ def _arc_path(f: Path) -> str:
 def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int = 500,
           target: Path | None = None) -> tuple[Path, dict]:
     stamp = _dt.datetime.now().strftime("%Y-%m-%d_%H%M")
-    target = target or out_dir(cfg) / f"выгрузка_ПТО_{stamp}.zip"
+    who = safe_name(cfg.get("engineer") or "пользователь")
+    target = target or out_dir(cfg) / f"выгрузка_ПТО_{who}_{stamp}.zip"
     target.parent.mkdir(parents=True, exist_ok=True)
-    st = {"участников": 0, "записей": 0, "чатов": 0, "троек": 0, "файлов": 0, "заметок": 0,
+    st = {"участников": 0, "записей": 0, "чатов": 0, "пожеланий": 0, "троек": 0, "файлов": 0, "заметок": 0,
           "не_влезло": [], "нет_файла": []}
     budget = limit_mb * 1024 * 1024
     seen: set[str] = set()
+    wishes: list[str] = []
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
         for m in _members(cfg, all_):
             st["участников"] += 1
@@ -77,6 +105,9 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
             for ev in read_journal(m / "журнал.jsonl"):
                 st["записей"] += 1
                 st["чатов"] += ev.get("действие") == "чат"
+                if ev.get("действие") == "пожелание":
+                    st["пожеланий"] += 1
+                    wishes.append(f"{str(ev.get('время', ''))[:16]}  {ev.get('инженер', m.name)}: {ev.get('текст', '')}")
                 if ev.get("действие") != "тройка":
                     continue
                 st["троек"] += 1
@@ -103,9 +134,14 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
         for i, p in enumerate(sorted(notes)):
             zf.write(p, f"заметки_разметки/{i:03d}_{safe_name(p.parent.name)}_{safe_name(p.name)}")
         st["заметок"] = len(notes)
+        ready = _readiness(cfg)
+        for name, data in ready.items():
+            zf.writestr(f"готовность/{name}", data)
+        zf.writestr("ПОЖЕЛАНИЯ.txt", "\r\n".join(wishes) or "Пожеланий нет.")
         lines = [f"Выгрузка скилла ПТО, {now()}", f"Пользователь: {cfg.get('engineer', '')}",
                  f"Участников: {st['участников']}, записей журнала: {st['записей']}, сводок чатов: {st['чатов']}, "
-                 f"троек: {st['троек']}, оригиналов: {st['файлов']}, заметок разметки: {st['заметок']}.",
+                 f"троек: {st['троек']}, пожеланий: {st['пожеланий']}, оригиналов: {st['файлов']}, заметок разметки: {st['заметок']}.",
+                 "Пожелания (было так, надо так) - ПОЖЕЛАНИЯ.txt. Готовность по системам - папка готовность (здание, доска, сводка).",
                  "Журнал: журнал.jsonl, одна строка - одно событие. Тройка: вход, итог, правки пользователя.",
                  "Архив никуда не отправлен. Пересылает его только сам пользователь."]
         if st["не_влезло"]:
@@ -119,7 +155,11 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
 
 def _rotate(folder: Path, keep: int) -> None:
     """Удаляет только свои старые архивы выгрузки (выгрузка_ПТО_*.zip), последние keep оставляет."""
-    old = sorted(folder.glob("выгрузка_ПТО_*.zip"), key=lambda p: p.name)[:-keep]
+    groups: dict[str, list[Path]] = {}
+    for p in folder.glob("выгрузка_ПТО_*.zip"):
+        m = re.match(r"(.*)_\d{4}-\d{2}-\d{2}_\d{4}\.zip$", p.name)
+        groups.setdefault(m.group(1) if m else p.name, []).append(p)
+    old = [p for g in groups.values() for p in sorted(g, key=lambda x: x.name)[:-keep]]   # по 4 на человека
     for p in old:
         try:
             p.unlink()
@@ -152,7 +192,7 @@ def main(argv=None) -> int:
     save_config(cfg)
     log_event(cfg, "выгрузка", файл=str(target), оригиналов=st["файлов"])
     print(f"Архив: {target}")
-    print(f"Сводок чатов: {st['чатов']}, троек: {st['троек']}, оригиналов: {st['файлов']}"
+    print(f"Сводок чатов: {st['чатов']}, пожеланий: {st['пожеланий']}, троек: {st['троек']}, оригиналов: {st['файлов']}"
           + (f", не вошли по размеру: {len(st['не_влезло'])}" if st["не_влезло"] else "")
           + (f", не найдены на диске: {len(st['нет_файла'])}" if st["нет_файла"] else ""))
     print("Скилл архив никуда не отправляет. Он лежит в вашей папке: кому вы открыли к ней доступ, тот его увидит.")
