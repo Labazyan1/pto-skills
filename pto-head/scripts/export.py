@@ -23,7 +23,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-from common import engineer_dir, home, load_config, log_event, now, read_journal, safe_name, save_config
+from common import claude_dir, engineer_dir, home, load_config, log_event, now, read_journal, safe_name, save_config
 
 OWN = ("журнал.jsonl", "замечания.json", "состояние.json", "владелец.json")
 
@@ -70,6 +70,45 @@ def _readiness(cfg: dict) -> dict[str, bytes]:
     if cfg.get("team_folder") and board.exists():
         out["доска.html"] = board.read_bytes()
     return out
+
+
+SKILL_MARKERS = ("pto-engineer", "pto-head", "scripts/log.py", "scripts\\log.py", "pto-skill")
+
+
+def _claude_code(zf: zipfile.ZipFile, cfg: dict, budget: int, st: dict) -> tuple[int, int]:
+    """Вкладка Code на этом ПК: сессии, где работал скилл (истории с картинками и вложения), изменённые после
+    прошлой выгрузки. Посторонние проекты не берутся."""
+    root = claude_dir()
+    since = 0.0
+    if cfg.get("last_export"):
+        try:
+            since = _dt.datetime.fromisoformat(cfg["last_export"]).timestamp()
+        except ValueError:
+            since = 0.0
+    n = 0
+    for f in sorted((root / "projects").glob("*/*.jsonl")) if (root / "projects").is_dir() else []:
+        try:
+            if f.stat().st_mtime < since:
+                continue
+            text = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if not any(m in text for m in SKILL_MARKERS):
+            continue
+        size = f.stat().st_size
+        if size > budget:
+            st["не_влезло"].append(str(f))
+            continue
+        budget -= size
+        zf.write(f, f"claude_code/{safe_name(f.parent.name)}/{f.name}")
+        up = root / "uploads" / f.stem
+        if up.is_dir():
+            for u in sorted(up.iterdir()):
+                if u.is_file() and u.stat().st_size <= budget:
+                    budget -= u.stat().st_size
+                    zf.write(u, f"claude_code/вложения/{f.stem}/{safe_name(u.name)}")
+        n += 1
+    return n, budget
 
 
 def _members(cfg: dict, all_: bool) -> list[Path]:
@@ -144,6 +183,8 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
                 elif f.is_file():
                     st["не_влезло"].append(str(f))
         st["историй"] = len(hist)
+        if with_files:
+            st["сессий_code"], budget = _claude_code(zf, cfg, budget, st)
         notes = []
         for root in cfg.get("work_folders") or []:
             r = Path(root)
@@ -158,9 +199,10 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
         zf.writestr("ПОЖЕЛАНИЯ.txt", "\r\n".join(wishes) or "Пожеланий нет.")
         lines = [f"Выгрузка скилла ПТО, {now()}", f"Пользователь: {cfg.get('engineer', '')}",
                  f"Участников: {st['участников']}, записей журнала: {st['записей']}, сводок чатов: {st['чатов']}, "
-                 f"троек: {st['троек']}, историй файлов: {st.get('историй', 0)}, пожеланий: {st['пожеланий']}, оригиналов: {st['файлов']}, заметок разметки: {st['заметок']}.",
+                 f"троек: {st['троек']}, историй файлов: {st.get('историй', 0)}, сессий вкладки Code: {st.get('сессий_code', 0)}, пожеланий: {st['пожеланий']}, оригиналов: {st['файлов']}, заметок разметки: {st['заметок']}.",
                  "Пожелания (было так, надо так) - ПОЖЕЛАНИЯ.txt. Готовность по системам - папка готовность (здание, доска, сводка).",
                  "Журнал: журнал.jsonl, одна строка - одно событие. Тройка: вход, итог, правки пользователя.",
+                 "Вкладка Code: папка claude_code - истории сессий, где работал скилл (с картинками), и вложения к ним.",
                  "История файла: папка история/<номер> - копии входа, каждой версии и итога; шаги (замечание, правка) - в журнале, события файл_начало, файл_шаг, тройка с тем же id.",
                  "Архив никуда не отправлен. Пересылает его только сам пользователь."]
         if st["не_влезло"]:

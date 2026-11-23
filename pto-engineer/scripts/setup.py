@@ -17,7 +17,7 @@ import string
 import sys
 from pathlib import Path
 
-from common import config_path, engineer_dir, log_event, safe_name, save_config
+from common import config_path, engineer_dir, keep_claude_history, log_event, safe_name, save_config
 
 SHORTCUT_HINT = ("Если папкой с вами поделились, на компьютере её не видно, пока она не добавлена в «Мой диск»: "
                  "drive.google.com → «Доступные мне» → правой кнопкой по папке → «Упорядочить» → «Добавить ярлык» → "
@@ -189,6 +189,9 @@ def main(argv=None) -> int:
     save_config(cfg)
     log_event(cfg, "сводка", заметка="скилл настроен", роль=role)
     print(f"Готово: {engineer}, объект {team.name}, роль {role}.")
+    kept = keep_claude_history()
+    if kept:
+        print(kept)
     return 0
 
 

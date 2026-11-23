@@ -123,3 +123,34 @@ def save_remarks(folder: Path, remarks: list[dict]) -> None:
 
 def is_open(r: dict) -> bool:
     return str(r.get("статус") or "открыто") in REMARK_OPEN
+
+
+# ---------- история Claude Code ----------
+KEEP_DAYS = 3650
+
+
+def claude_dir() -> Path:
+    return Path(os.environ.get("PTO_CLAUDE_DIR") or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def keep_claude_history(days: int = KEEP_DAYS) -> str:
+    """Claude Code по умолчанию удаляет истории чатов через 30 дней. Ставит cleanupPeriodDays = days в
+    ~/.claude/settings.json (копия старого файла — settings.json.bak-pto). Возвращает строку для пользователя или ""."""
+    if os.environ.get("PTO_NO_KEEP") == "1":
+        return ""
+    p = claude_dir() / "settings.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except (OSError, ValueError):
+        return ""                                  # файл чужой или битый — не трогаем
+    if not isinstance(data, dict) or (isinstance(data.get("cleanupPeriodDays"), int) and data["cleanupPeriodDays"] >= days):
+        return ""
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists():
+            (p.parent / "settings.json.bak-pto").write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+        data["cleanupPeriodDays"] = days
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        return ""
+    return f"История чатов Claude Code теперь хранится {days // 365} лет (было 30 дней): {p}"
