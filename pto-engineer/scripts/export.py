@@ -1,7 +1,7 @@
 """Один архив с историей работы: пользователь сам пересылает его, кому решит (скилл ничего не отправляет).
 
-python export.py                    — архив выгрузка_ПТО_<дата>.zip в папку «ПТО — выгрузка» рядом с папкой команды
-                                      на Google Диске (нет Диска — рабочий стол); хранятся последние 4 архива
+python export.py                    — архив выгрузка_ПТО_<имя>_<дата>.zip в папку «_выгрузка» внутри папки команды
+                                      (нет папки команды — рабочий стол); хранятся последние 8 на человека
 python export.py --папка ПУТЬ       — своя папка выгрузки (запоминается)
 python export.py --все              — начальнику: подпапки всех участников папки команды
 python export.py --без-файлов       — без оригиналов, только журнал и пути
@@ -28,21 +28,21 @@ from common import claude_dir, engineer_dir, home, load_config, log_event, now, 
 OWN = ("журнал.jsonl", "замечания.json", "состояние.json", "владелец.json")
 
 
-EXPORT_FOLDER = "ПТО — выгрузка"
-KEEP = 4                                                   # сколько последних архивов держать в папке выгрузки
+EXPORT_FOLDER = "_выгрузка"
+KEEP = 8                                                   # сколько последних архивов держать в папке выгрузки
 
 
 def out_dir(cfg: dict | None = None) -> Path:
-    """Куда класть архив: PTO_EXPORT_DIR > своя папка (--папка) > «ПТО — выгрузка» рядом с папкой команды
-    на Google Диске (её владелец открывает доступ, кому решит) > рабочий стол."""
+    """Куда класть архив: PTO_EXPORT_DIR > своя папка (--папка) > «_выгрузка» внутри папки команды (она на Диске
+    начальника и видна ему у каждого инженера; начальник открывает её, кому решит) > рабочий стол."""
     if os.environ.get("PTO_EXPORT_DIR"):
         return Path(os.environ["PTO_EXPORT_DIR"])
     cfg = cfg or {}
     if cfg.get("export_dir"):
         return Path(cfg["export_dir"])
     team = Path(cfg["team_folder"]) if cfg.get("team_folder") else None
-    if team and team.parent.is_dir():
-        return team.parent / EXPORT_FOLDER
+    if team and team.is_dir():
+        return team / EXPORT_FOLDER
     for d in (Path.home() / "Desktop", Path.home() / "Рабочий стол", Path.home() / "OneDrive" / "Desktop"):
         if d.is_dir():
             return d
@@ -175,13 +175,18 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
                     st["файлов"] += 1
         hroot = home() / "история"
         hist = sorted(d for d in hroot.iterdir() if d.is_dir()) if hroot.is_dir() and with_files else []
+        packed: set[str] = set()                 # истории, вошедшие в архив целиком: только их можно чистить
         for d in hist:
+            whole = True
             for f in sorted(d.iterdir()):
                 if f.is_file() and f.stat().st_size <= budget:
                     budget -= f.stat().st_size
                     zf.write(f, f"история/{d.name}/{f.name}")
                 elif f.is_file():
                     st["не_влезло"].append(str(f))
+                    whole = False
+            if whole:
+                packed.add(d.name)
         st["историй"] = len(hist)
         if with_files:
             st["сессий_code"], budget = _claude_code(zf, cfg, budget, st)
@@ -211,7 +216,7 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
             lines += ["", "Файл не найден на диске (перемещён или загружен прямо в чат):", *st["нет_файла"]]
         zf.writestr("ЧИТАТЬ.txt", "\r\n".join(lines))
     _rotate(target.parent, keep=KEEP)
-    _prune_history(closed)
+    _prune_history(closed & packed if with_files else set())
     return target, st
 
 
