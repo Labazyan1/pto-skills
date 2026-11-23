@@ -95,6 +95,7 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
     budget = limit_mb * 1024 * 1024
     seen: set[str] = set()
     wishes: list[str] = []
+    closed: set[str] = set()
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
         for m in _members(cfg, all_):
             st["участников"] += 1
@@ -111,6 +112,13 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
                 if ev.get("действие") != "тройка":
                     continue
                 st["троек"] += 1
+                if ev.get("id"):
+                    closed.add(str(ev["id"]))
+                if ev.get("id") and (home() / "история" / safe_name(str(ev["id"]))).is_dir():
+                    st["нет_файла"] += [p for p in [*(ev.get("вход") or []), *(ev.get("итог") or [])]
+                                        if not Path(p).is_file() and p not in seen]
+                    seen.update(ev.get("вход") or [])
+                    continue                     # копии входа, версий и итога уже лежат в истории
                 for p in [*(ev.get("вход") or []), *(ev.get("итог") or [])]:
                     if not with_files or p in seen:
                         continue
@@ -126,6 +134,16 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
                     budget -= size
                     zf.write(f, f"{base}/файлы/{_arc_path(f)}")
                     st["файлов"] += 1
+        hroot = home() / "история"
+        hist = sorted(d for d in hroot.iterdir() if d.is_dir()) if hroot.is_dir() and with_files else []
+        for d in hist:
+            for f in sorted(d.iterdir()):
+                if f.is_file() and f.stat().st_size <= budget:
+                    budget -= f.stat().st_size
+                    zf.write(f, f"история/{d.name}/{f.name}")
+                elif f.is_file():
+                    st["не_влезло"].append(str(f))
+        st["историй"] = len(hist)
         notes = []
         for root in cfg.get("work_folders") or []:
             r = Path(root)
@@ -140,9 +158,10 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
         zf.writestr("ПОЖЕЛАНИЯ.txt", "\r\n".join(wishes) or "Пожеланий нет.")
         lines = [f"Выгрузка скилла ПТО, {now()}", f"Пользователь: {cfg.get('engineer', '')}",
                  f"Участников: {st['участников']}, записей журнала: {st['записей']}, сводок чатов: {st['чатов']}, "
-                 f"троек: {st['троек']}, пожеланий: {st['пожеланий']}, оригиналов: {st['файлов']}, заметок разметки: {st['заметок']}.",
+                 f"троек: {st['троек']}, историй файлов: {st.get('историй', 0)}, пожеланий: {st['пожеланий']}, оригиналов: {st['файлов']}, заметок разметки: {st['заметок']}.",
                  "Пожелания (было так, надо так) - ПОЖЕЛАНИЯ.txt. Готовность по системам - папка готовность (здание, доска, сводка).",
                  "Журнал: журнал.jsonl, одна строка - одно событие. Тройка: вход, итог, правки пользователя.",
+                 "История файла: папка история/<номер> - копии входа, каждой версии и итога; шаги (замечание, правка) - в журнале, события файл_начало, файл_шаг, тройка с тем же id.",
                  "Архив никуда не отправлен. Пересылает его только сам пользователь."]
         if st["не_влезло"]:
             lines += ["", "Не вошли по размеру (взять отдельно):", *st["не_влезло"]]
@@ -150,7 +169,22 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
             lines += ["", "Файл не найден на диске (перемещён или загружен прямо в чат):", *st["нет_файла"]]
         zf.writestr("ЧИТАТЬ.txt", "\r\n".join(lines))
     _rotate(target.parent, keep=KEEP)
+    _prune_history(closed)
     return target, st
+
+
+def _prune_history(closed: set[str], days: int = 30) -> None:
+    """Чтобы копии не копились: законченные истории (есть «тройка» с этим id), уже попавшие в архив и старше
+    days дней, удаляются с ПК. Незаконченные не трогаются."""
+    import shutil
+    import time
+    root = home() / "история"
+    if not root.is_dir():
+        return
+    edge = time.time() - days * 86400
+    for d in root.iterdir():
+        if d.is_dir() and d.name in {safe_name(x) for x in closed} and d.stat().st_mtime < edge:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def _rotate(folder: Path, keep: int) -> None:
