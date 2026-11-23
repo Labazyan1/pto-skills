@@ -10,6 +10,7 @@ python remarks.py before --acts "АОСР-1,АОСР-2"                      —
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 
 from common import engineer_dir, is_open, load_config, load_remarks, log_event, now, save_remarks
@@ -40,6 +41,9 @@ def main(argv=None) -> int:
     ap.add_argument("--дата", dest="date", default="")
     ap.add_argument("--acts", default="")
     ap.add_argument("--все", dest="all", action="store_true")
+    ap.add_argument("--категория", dest="cat", default="",
+                    help="нет ИС | документ о качестве | подпись | форма | расхождение с РД | даты | другое")
+    ap.add_argument("--файл", dest="file", default="", help="фото, скан или письмо с замечанием")
     a = ap.parse_args(argv)
     cfg = load_config()
     folder = engineer_dir(cfg)
@@ -51,10 +55,11 @@ def main(argv=None) -> int:
         src = a.src if a.src in SOURCES else "другое"
         r = {"id": max((x.get("id", 0) for x in remarks), default=0) + 1, "от": src, "текст": a.text.strip()[:2000],
              "акт": a.act.strip(), "захватка": a.zone.strip(), "система": a.system.strip(), "дата": a.date.strip(),
-             "статус": "открыто", "создано": now(), "ответ": ""}
+             "статус": "открыто", "создано": now(), "ответ": "",
+             "категория": a.cat.strip()[:60], "файл": str(Path(a.file).expanduser().resolve()) if a.file else ""}
         remarks.append(r)
         save_remarks(folder, remarks)
-        log_event(cfg, "замечание", шаг="добавлено", id=r["id"], от=src, акт=r["акт"])
+        log_event(cfg, "замечание", шаг="добавлено", id=r["id"], от=src, акт=r["акт"], категория=r["категория"], файл=r["файл"])
         print("записано: " + line(r))
         return 0
     if a.cmd in ("answer", "close"):

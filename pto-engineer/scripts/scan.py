@@ -18,7 +18,7 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 
-EXT = {".docx", ".doc", ".pdf", ".xlsx", ".xls", ".dwg", ".dxf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".odt"}
+EXT = {".docx", ".doc", ".pdf", ".xlsx", ".xls", ".dwg", ".dxf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".odt", ".heic"}
 SKIP_DIRS = {"$recycle.bin", ".git", "__pycache__", "node_modules", "~$"}
 KINDS = [  # (тип, регулярка по имени/пути/началу текста) — порядок важен
     ("АООК", r"аоок|ответственных\s+конструкц"),

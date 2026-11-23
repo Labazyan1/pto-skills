@@ -9,6 +9,15 @@ python log.py пожелание "что работает не так и как 
 python log.py файл-начало --вход ФАЙЛ [ФАЙЛ ...] [--текст "что за работа"]        → печатает номер истории
 python log.py файл-шаг --id НОМЕР [--замечание "что не так"] [--правка "было → стало"] [--версия ФАЙЛ]
 python log.py тройка [--id НОМЕР] [--вход ФАЙЛ ...] --итог ФАЙЛ [ФАЙЛ ...] [--правки "…"] [--текст "…"]   — каким ушёл
+python log.py тройка --id НОМЕР --итог ФАЙЛ --сдано ФАЙЛ   — --сдано: что реально ушло заказчику (после AutoCAD и т. п.)
+
+Пометки разметки по одной (для обучения чтению фото):
+python log.py пометки --id НОМЕР --json ФАЙЛ_ИЛИ_ТЕКСТ   — список [{"номер": 1, "фото": "имя.jpg", "место": [x0, y0, x1, y1]
+       (доли 0..1 от ширины и высоты фото), "тип": "трасса|стена|выноска|замер|снятие|прибор|перенос|номер|прочее",
+       "прочтение": "что это по-твоему", "уверенность": "уверен|не уверен"}]
+python log.py решение --id НОМЕР --номер N --решение "верно" | "иначе: …"   — ответ инженера по пометке
+python log.py оценка --находка "текст находки проверки" --ответ согласен|ложно|неважно [--почему "…"] [--акт НОМЕР]
+
 Копии входа, каждой промежуточной версии и итога кладутся на этот ПК: ~/.pto-skill/история/<номер>/
 (файл потом меняется — копия остаётся какой была). Журнал — в подпапке пользователя в папке команды.
 Наружу ничего не отправляется.
@@ -60,6 +69,8 @@ def main(argv=None) -> int:
     if len(args) == 2 and args[0] in ("запрос", "итог", "чат", "пожелание"):
         log_event(load_config(), args[0], текст=args[1][:20000 if args[0] == "чат" else 4000])
         return 0
+    if args and args[0] in ("пометки", "решение", "оценка"):
+        return marks(args)
     if not args or args[0] not in ("файл-начало", "файл-шаг", "тройка"):
         print(__doc__)
         return 2
@@ -73,6 +84,7 @@ def main(argv=None) -> int:
     ap.add_argument("--правка", dest="fix", default="")
     ap.add_argument("--правки", dest="fixes", default="")
     ap.add_argument("--текст", dest="text", default="")
+    ap.add_argument("--сдано", dest="done", nargs="+", default=[])
     a = ap.parse_args(args[1:])
     cfg = load_config()
     if cmd == "файл-начало":
@@ -99,8 +111,62 @@ def main(argv=None) -> int:
     if not a.id:
         _copy(hid, inputs, "вход")                       # без начала истории вход копируется здесь
     copies = _copy(hid, a.out, "итог")
+    done = _copy(hid, a.done, "сдано") if a.done else []
     log_event(cfg, "тройка", id=hid, вход=[str(Path(x).expanduser().resolve()) for x in inputs],
-              итог=[c["путь"] for c in copies], итог_копии=copies, правки=a.fixes[:4000], текст=a.text[:2000])
+              итог=[c["путь"] for c in copies], итог_копии=copies, сдано=[c["путь"] for c in done], сдано_копии=done,
+              правки=a.fixes[:4000], текст=a.text[:2000])
+    print("записано")
+    return 0
+
+
+MARK_TYPES = {"трасса", "стена", "выноска", "замер", "снятие", "прибор", "перенос", "номер", "прочее"}
+
+
+def marks(args: list[str]) -> int:
+    import json
+    cmd = args[0]
+    ap = argparse.ArgumentParser(prog=f"log.py {cmd}")
+    ap.add_argument("--id", default="")
+    ap.add_argument("--json", dest="js", default="")
+    ap.add_argument("--номер", dest="num", type=int)
+    ap.add_argument("--решение", dest="decision", default="")
+    ap.add_argument("--находка", dest="finding", default="")
+    ap.add_argument("--ответ", dest="answer", choices=["согласен", "ложно", "неважно"])
+    ap.add_argument("--почему", dest="why", default="")
+    ap.add_argument("--акт", dest="act", default="")
+    a = ap.parse_args(args[1:])
+    cfg = load_config()
+    if cmd == "пометки":
+        if not a.id or not a.js:
+            print("нужны --id и --json"); return 2
+        src = Path(a.js)
+        raw = src.read_text(encoding="utf-8") if len(a.js) < 260 and src.is_file() else a.js
+        try:
+            items = json.loads(raw)
+        except ValueError as exc:
+            print(f"не JSON: {exc}"); return 2
+        if not isinstance(items, list) or not all(isinstance(x, dict) for x in items):
+            print("нужен список объектов"); return 2
+        clean = []
+        for i, x in enumerate(items, 1):
+            place = x.get("место")
+            ok_place = isinstance(place, list) and len(place) == 4 and all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in place)
+            clean.append({"номер": x.get("номер", i), "фото": str(x.get("фото", ""))[:200], "место": place if ok_place else None,
+                          "тип": x.get("тип") if x.get("тип") in MARK_TYPES else "прочее",
+                          "прочтение": str(x.get("прочтение", ""))[:500], "уверенность": str(x.get("уверенность", ""))[:20]})
+        log_event(cfg, "пометки", id=a.id, пометки=clean)
+        bad = sum(1 for c in clean if c["место"] is None)
+        print(f"записано пометок: {len(clean)}" + (f", без места на фото: {bad}" if bad else ""))
+        return 0
+    if cmd == "решение":
+        if not a.id or a.num is None or not a.decision:
+            print("нужны --id, --номер, --решение"); return 2
+        log_event(cfg, "решение", id=a.id, номер=a.num, решение=a.decision[:1000])
+        print("записано")
+        return 0
+    if not a.finding or not a.answer:
+        print("нужны --находка и --ответ"); return 2
+    log_event(cfg, "оценка", находка=a.finding[:1000], ответ=a.answer, почему=a.why[:1000], акт=a.act)
     print("записано")
     return 0
 

@@ -190,6 +190,9 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
         st["историй"] = len(hist)
         if with_files:
             st["сессий_code"], budget = _claude_code(zf, cfg, budget, st)
+        nroot = home() / "заметки"
+        for f in sorted(nroot.rglob("*.md")) if nroot.is_dir() else []:
+            zf.write(f, f"заметки/{safe_name(f.parent.name)}/{safe_name(f.name)}")
         notes = []
         for root in cfg.get("work_folders") or []:
             r = Path(root)
