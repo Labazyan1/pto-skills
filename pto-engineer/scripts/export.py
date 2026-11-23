@@ -1,6 +1,8 @@
 """Один архив с историей работы: пользователь сам пересылает его, кому решит (скилл ничего не отправляет).
 
-python export.py                    — архив на «Рабочий стол»: выгрузка_ПТО_<дата>.zip (нет стола — ~/.pto-skill/выгрузка)
+python export.py                    — архив выгрузка_ПТО_<дата>.zip в папку «ПТО — выгрузка» рядом с папкой команды
+                                      на Google Диске (нет Диска — рабочий стол); хранятся последние 4 архива
+python export.py --папка ПУТЬ       — своя папка выгрузки (запоминается)
 python export.py --все              — начальнику: подпапки всех участников папки команды
 python export.py --без-файлов       — без оригиналов, только журнал и пути
 python export.py --лимит 500        — потолок оригиналов, МБ (по умолчанию 500; не влезло — в список)
@@ -23,9 +25,21 @@ from common import engineer_dir, home, load_config, log_event, now, read_journal
 OWN = ("журнал.jsonl", "замечания.json", "состояние.json", "владелец.json")
 
 
-def out_dir() -> Path:
+EXPORT_FOLDER = "ПТО — выгрузка"
+KEEP = 4                                                   # сколько последних архивов держать в папке выгрузки
+
+
+def out_dir(cfg: dict | None = None) -> Path:
+    """Куда класть архив: PTO_EXPORT_DIR > своя папка (--папка) > «ПТО — выгрузка» рядом с папкой команды
+    на Google Диске (её владелец открывает доступ, кому решит) > рабочий стол."""
     if os.environ.get("PTO_EXPORT_DIR"):
         return Path(os.environ["PTO_EXPORT_DIR"])
+    cfg = cfg or {}
+    if cfg.get("export_dir"):
+        return Path(cfg["export_dir"])
+    team = Path(cfg["team_folder"]) if cfg.get("team_folder") else None
+    if team and team.parent.is_dir():
+        return team.parent / EXPORT_FOLDER
     for d in (Path.home() / "Desktop", Path.home() / "Рабочий стол", Path.home() / "OneDrive" / "Desktop"):
         if d.is_dir():
             return d
@@ -47,7 +61,7 @@ def _arc_path(f: Path) -> str:
 def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int = 500,
           target: Path | None = None) -> tuple[Path, dict]:
     stamp = _dt.datetime.now().strftime("%Y-%m-%d_%H%M")
-    target = target or out_dir() / f"выгрузка_ПТО_{stamp}.zip"
+    target = target or out_dir(cfg) / f"выгрузка_ПТО_{stamp}.zip"
     target.parent.mkdir(parents=True, exist_ok=True)
     st = {"участников": 0, "записей": 0, "чатов": 0, "троек": 0, "файлов": 0, "заметок": 0,
           "не_влезло": [], "нет_файла": []}
@@ -99,7 +113,18 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
         if st["нет_файла"]:
             lines += ["", "Файл не найден на диске (перемещён или загружен прямо в чат):", *st["нет_файла"]]
         zf.writestr("ЧИТАТЬ.txt", "\r\n".join(lines))
+    _rotate(target.parent, keep=KEEP)
     return target, st
+
+
+def _rotate(folder: Path, keep: int) -> None:
+    """Удаляет только свои старые архивы выгрузки (выгрузка_ПТО_*.zip), последние keep оставляет."""
+    old = sorted(folder.glob("выгрузка_ПТО_*.zip"), key=lambda p: p.name)[:-keep]
+    for p in old:
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def main(argv=None) -> int:
@@ -109,8 +134,12 @@ def main(argv=None) -> int:
     ap.add_argument("--лимит", dest="limit", type=int, default=500)
     ap.add_argument("--если-старше", dest="older", type=float)
     ap.add_argument("--в", dest="target")
+    ap.add_argument("--папка", dest="folder", help="запомнить свою папку выгрузки")
     a = ap.parse_args(argv)
     cfg = load_config()
+    if a.folder:
+        cfg["export_dir"] = str(Path(a.folder).expanduser())
+        save_config(cfg)
     last = cfg.get("last_export")
     if a.older is not None and last:
         age = _dt.datetime.now().astimezone() - _dt.datetime.fromisoformat(last)
@@ -126,7 +155,7 @@ def main(argv=None) -> int:
     print(f"Сводок чатов: {st['чатов']}, троек: {st['троек']}, оригиналов: {st['файлов']}"
           + (f", не вошли по размеру: {len(st['не_влезло'])}" if st["не_влезло"] else "")
           + (f", не найдены на диске: {len(st['нет_файла'])}" if st["нет_файла"] else ""))
-    print("Архив никуда не отправлен: перешлите его сами, кому нужно.")
+    print("Скилл архив никуда не отправляет. Он лежит в вашей папке: кому вы открыли к ней доступ, тот его увидит.")
     return 0
 
 
