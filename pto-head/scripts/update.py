@@ -1,5 +1,6 @@
 """Установка и обновление скилла с GitHub (без git: архив репозитория по HTTPS).
 
+python update.py --auto           — раз в день: есть новая версия — поставить сразу и сказать, что нового (иначе молчит)
 python update.py --check          — есть ли новая версия (раз в день, иначе молчит; --force — проверить сейчас)
 python update.py                  — показать, какие файлы изменит обновление (ничего не меняет)
 python update.py --yes            — применить обновление (после того как человек посмотрел список и сказал «да»)
@@ -175,9 +176,52 @@ def check(force: bool) -> int:
     return 0
 
 
+def news(src: dict, since: str) -> str:
+    """Записи CHANGELOG.md новее since (чтобы сказать пользователю, что нового)."""
+    base = os.environ.get("PTO_SKILL_RAW") or f"https://raw.githubusercontent.com/{src['repo']}/{src['branch']}"
+    try:
+        text = _get(f"{base}/CHANGELOG.md").decode("utf-8")
+    except OSError:
+        return ""
+    out = []
+    for line in text.splitlines():
+        if line.startswith("## ") and not newer(line[3:].strip(), since):
+            break
+        if line.startswith("## ") or out:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def auto(force: bool) -> int:
+    """Автообновление (решение 23.11): раз в день поставить новую версию сразу. Выключено (--off) — в сеть не ходим."""
+    last = _state()
+    today = dt.date.today().isoformat()
+    if last.get("выключено") or (not force and last.get("день") == today):
+        return 0
+    src = source()
+    try:
+        remote = remote_version(src)
+    except OSError:
+        return 0
+    _save_state({**last, "день": today, "версия": remote})
+    mine = local_version()
+    if not newer(remote, mine):
+        return 0
+    try:
+        got = extract_skill(archive(src, remote, SKILL_DIR.name), SKILL_DIR.name, SKILL_DIR)
+    except (OSError, SystemExit) as exc:
+        print(f"Обновить скилл не удалось: {exc}")
+        return 0
+    print(f"Скилл обновлён: {mine} → {got}. Что нового:")
+    print(news(src, mine) or "(список изменений не загрузился)")
+    print("Выключить автообновление: python scripts/update.py --off")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--auto", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--install")
     ap.add_argument("--to")
@@ -188,9 +232,11 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.off or a.on:
         _save_state({**_state(), "выключено": bool(a.off)})
-        print("Проверка обновлений выключена: скилл сам в сеть не ходит. Включить: --on." if a.off
-              else "Проверка обновлений включена (раз в день).")
+        print("Проверка обновлений выключена, автообновление тоже: скилл сам в сеть не ходит. Включить: --on." if a.off
+              else "Автообновление включено (раз в день).")
         return 0
+    if a.auto:
+        return auto(a.force)
     if a.check:
         return check(a.force)
     src = source()
