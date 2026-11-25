@@ -16,7 +16,9 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
-from check import DOC_DATE, iso
+from check import iso
+
+DOC_DATE = re.compile(r"от\s+(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})")
 
 SCHEME = re.compile(r"^(ИС|ИГС|исполнительн)", re.I)
 

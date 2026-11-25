@@ -50,25 +50,16 @@ def out_dir(cfg: dict | None = None) -> Path:
 
 
 def _readiness(cfg: dict) -> dict[str, bytes]:
-    """Готовность по системам: здание.html, доска.html и текст сводки — свежие, теми же скриптами, что у начальника."""
+    """Текст сводки по команде — свежий, тем же скриптом, что у начальника."""
     here = Path(__file__).resolve().parent
     env = {**os.environ, "PTO_NO_OPEN": "1", "PYTHONIOENCODING": "utf-8"}
     out: dict[str, bytes] = {}
-    with tempfile.TemporaryDirectory() as tmp:
-        b = Path(tmp) / "здание.html"
-        try:
-            subprocess.run([sys.executable, str(here / "building.py"), "--out", str(b), "--no-open"], cwd=here, env=env,
-                           capture_output=True, timeout=300)
-            if b.exists():
-                out["здание.html"] = b.read_bytes()
-            r = subprocess.run([sys.executable, str(here / "summary.py")], cwd=here, env=env, capture_output=True, timeout=300)
-            if r.returncode == 0 and r.stdout:
-                out["сводка.txt"] = r.stdout
-        except (OSError, subprocess.SubprocessError):
-            pass
-    board = Path(cfg.get("team_folder") or "") / "доска.html"
-    if cfg.get("team_folder") and board.exists():
-        out["доска.html"] = board.read_bytes()
+    try:
+        r = subprocess.run([sys.executable, str(here / "summary.py")], cwd=here, env=env, capture_output=True, timeout=300)
+        if r.returncode == 0 and r.stdout:
+            out["сводка.txt"] = r.stdout
+    except (OSError, subprocess.SubprocessError):
+        pass
     return out
 
 
@@ -208,7 +199,7 @@ def build(cfg: dict, all_: bool = False, with_files: bool = True, limit_mb: int 
         lines = [f"Выгрузка скилла ПТО, {now()}", f"Пользователь: {cfg.get('engineer', '')}",
                  f"Участников: {st['участников']}, записей журнала: {st['записей']}, сводок чатов: {st['чатов']}, "
                  f"троек: {st['троек']}, историй файлов: {st.get('историй', 0)}, сессий вкладки Code: {st.get('сессий_code', 0)}, пожеланий: {st['пожеланий']}, оригиналов: {st['файлов']}, заметок разметки: {st['заметок']}.",
-                 "Пожелания (было так, надо так) - ПОЖЕЛАНИЯ.txt. Готовность по системам - папка готовность (здание, доска, сводка).",
+                 "Пожелания (было так, надо так) - ПОЖЕЛАНИЯ.txt. Сводка по команде - папка готовность.",
                  "Журнал: журнал.jsonl, одна строка - одно событие. Тройка: вход, итог, правки пользователя.",
                  "Вкладка Code: папка claude_code - истории сессий, где работал скилл (с картинками), и вложения к ним.",
                  "История файла: папка история/<номер> - копии входа, каждой версии и итога; шаги (замечание, правка) - в журнале, события файл_начало, файл_шаг, тройка с тем же id.",

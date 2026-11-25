@@ -13,7 +13,15 @@ import re
 import sys
 from pathlib import Path
 
-from check import iso, places
+from check import iso
+
+PLACE = re.compile(r"(в осях\s+[\w\-/., ]+?)(?=,|$| на | захват)|(\d+\s*этаж)|(захватк\w*\s*\d+)|(отм\.\s*[+\-−]?\d[\d.,]*)", re.I)
+
+
+def places(a: dict) -> set:
+    """Места работ: оси, этаж, захватка, отметка — нормализованные строки."""
+    txt = ", ".join(str(a.get(k, "")) for k in ("работы", "захватка"))
+    return {re.sub(r"\s+", " ", "".join(m.groups(default="")).lower().strip()) for m in PLACE.finditer(txt)}
 
 # основа слова в описании работ → это скрытая работа (нужен АОСР). ЧЕРНОВИК.
 HIDDEN = ["армирован", "бетонирован", "гидроизоляц", "пароизоляц", "утеплен", "теплоизоляц", "обратн засыпк",
