@@ -18,6 +18,11 @@ python log.py пометки --id НОМЕР --json ФАЙЛ_ИЛИ_ТЕКСТ  
 python log.py решение --id НОМЕР --номер N --решение "верно" | "иначе: …"   — ответ инженера по пометке
 python log.py оценка --находка "текст находки проверки" --ответ согласен|ложно|неважно [--почему "…"] [--акт НОМЕР]
 
+Операция правки (для отчёта «что делают руками чаще всего», ops_freq.py):
+python log.py операция КОД [--раз N] [--id НОМЕР] [--файл ПУТЬ] [--текст "что именно"]
+       КОД — перенос | копия | подпись | текст | трасса | линия | удаление | прибор | цвет | подложка | стена | слой |
+       создание | длины_кж | спецификация | штамп | лист | прочее (своё слово — тоже можно, пиши коротко)
+
 Копии входа, каждой промежуточной версии и итога кладутся на этот ПК: ~/.pto-skill/история/<номер>/
 (файл потом меняется — копия остаётся какой была). Журнал — в подпапке пользователя в папке команды.
 Наружу ничего не отправляется.
@@ -30,7 +35,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from common import home, load_config, log_event, read_journal, engineer_dir, safe_name
+from common import OP_CODES, home, load_config, log_event, read_journal, engineer_dir, safe_name
 
 MAX_COPY = 200 * 1024 * 1024          # файл крупнее — только путь, без копии
 
@@ -71,6 +76,8 @@ def main(argv=None) -> int:
         return 0
     if args and args[0] in ("пометки", "решение", "оценка"):
         return marks(args)
+    if args and args[0] == "операция":
+        return operation(args[1:])
     if not args or args[0] not in ("файл-начало", "файл-шаг", "тройка"):
         print(__doc__)
         return 2
@@ -116,6 +123,29 @@ def main(argv=None) -> int:
               итог=[c["путь"] for c in copies], итог_копии=copies, сдано=[c["путь"] for c in done], сдано_копии=done,
               правки=a.fixes[:4000], текст=a.text[:2000])
     print("записано")
+    return 0
+
+
+def op_code(code: str) -> str:
+    """Код операции: строчными, пробелы → «_», до 40 знаков; «длины КЖ» = «длины_кж»."""
+    c = "_".join(str(code).strip().lower().split())[:40]
+    return c or "прочее"
+
+
+def operation(args: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="log.py операция")
+    ap.add_argument("код")
+    ap.add_argument("--раз", dest="times", type=int, default=1)
+    ap.add_argument("--id", default="")
+    ap.add_argument("--файл", dest="file", default="")
+    ap.add_argument("--текст", dest="text", default="")
+    a = ap.parse_args(args)
+    if a.times < 1:
+        print("--раз: целое ≥ 1"); return 2
+    code = op_code(a.код)
+    log_event(load_config(), "операция", код=code, раз=a.times, id=a.id, файл=Path(a.file).name if a.file else "",
+              текст=a.text[:1000])
+    print("записано" + ("" if code in OP_CODES else f" (новый код «{code}»)"))
     return 0
 
 
